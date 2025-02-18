@@ -1,0 +1,1 @@
+# Usage: tsx index.ts <directory-path> [--ignore pattern1 pattern2 ...]
