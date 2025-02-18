@@ -1,73 +1,87 @@
-import fs from "fs";
-import path from "path";
+import * as fs from "fs";
+import * as path from "path";
 import { minimatch } from "minimatch";
+
+const ignorePatterns: string[] = [
+  "node_modules",
+  ".git",
+  "*.jpg",
+  "*.jpeg",
+  "*.png",
+  "*.gif",
+  "*.svg",
+  "*.webp",
+  "package-lock.json"
+];
 
 interface FileEntry {
   path: string;
   content: string;
 }
 
+const XML_ESCAPE_MAP: Record<string, string> = {
+  "<": "&lt;",
+  ">": "&gt;",
+  "&": "&amp;",
+  "'": "&apos;",
+  '"': "&quot;"
+};
+
 function escapeXml(unsafe: string): string {
-  return unsafe.replace(/[<>&'"]/g, (char) => {
-    switch (char) {
-      case "<":
-        return "<";
-      case ">":
-        return ">";
-      case "&":
-        return "&";
-      case "'":
-        return "'";
-      case '"':
-        return `"`;
-      default:
-        return char;
-    }
-  });
+  return unsafe.replace(/[<>&'"]/g, (char) => XML_ESCAPE_MAP[char] || char);
 }
 
-function readDirectory(
+async function readDirectory(
   dirPath: string,
   ignorePatterns: string[] = []
-): FileEntry[] {
+): Promise<FileEntry[]> {
   const entries: FileEntry[] = [];
 
-  function walk(currentPath: string) {
-    const files = fs.readdirSync(currentPath);
+  async function walk(currentPath: string) {
+    try {
+      const files = await fs.promises.readdir(currentPath);
 
-    for (const file of files) {
-      const fullPath = path.join(currentPath, file);
-      const relativePath = path.relative(dirPath, fullPath);
-      const stat = fs.statSync(fullPath);
+      await Promise.all(files.map(async (file: string) => {
+        try {
+          const fullPath = path.join(currentPath, file);
+          const relativePath = path.relative(dirPath, fullPath);
+          const stat = await fs.promises.stat(fullPath);
 
-      // Skip if matches any ignore pattern
-      let shouldIgnore = false;
-      for (const pattern of ignorePatterns) {
-        const matches = minimatch(relativePath, pattern, { matchBase: true });
-        console.log(`Checking ${relativePath} against ${pattern}: ${matches}`);
-        if (matches) {
-          shouldIgnore = true;
-          break;
+          // Skip if matches any ignore pattern
+          const shouldIgnore = ignorePatterns.some((pattern) => {
+            const matches = minimatch(relativePath, pattern, { matchBase: true });
+            console.log(`Checking ${relativePath} against ${pattern}: ${matches}`);
+            return matches;
+          });
+
+          if (shouldIgnore) {
+            console.log(`Ignoring ${relativePath}`);
+            return;
+          }
+
+          if (stat.isDirectory()) {
+            await walk(fullPath);
+          } else {
+            const content = await fs.promises.readFile(fullPath, "utf-8");
+            entries.push({
+              path: relativePath,
+              content: escapeXml(content),
+            });
+          }
+        } catch (error) {
+          console.error(`Error processing file ${file}: ${(error as Error).message}`);
         }
-      }
-      if (shouldIgnore) {
-        console.log(`Ignoring ${relativePath}`);
-        continue;
-      }
-
-      if (stat.isDirectory()) {
-        walk(fullPath);
-      } else {
-        const content = fs.readFileSync(fullPath, "utf-8");
-        entries.push({
-          path: relativePath,
-          content: escapeXml(content),
-        });
-      }
+      }));
+    } catch (error) {
+      console.error(`Error reading directory ${currentPath}: ${(error as Error).message}`);
     }
   }
 
-  walk(dirPath);
+  try {
+    await walk(dirPath);
+  } catch (error) {
+    console.error(`Error walking directory ${dirPath}: ${(error as Error).message}`);
+  }
   return entries;
 }
 
@@ -85,7 +99,7 @@ function generateXml(files: FileEntry[]): string {
   return xml;
 }
 
-function main() {
+async function main() {
   if (process.argv.length < 3) {
     console.error(
       "Usage: tsx index.ts <directory-path> [--ignore pattern1 pattern2 ...]"
@@ -94,17 +108,7 @@ function main() {
   }
 
   const dirPath = process.argv[2];
-  const ignorePatterns: string[] = [
-    "node_modules",
-    ".git",
-    "*.jpg",
-    "*.jpeg", 
-    "*.png",
-    "*.gif",
-    "*.svg",
-    "*.webp",
-    "package-lock.json"
-  ];
+
   console.log("Raw command line arguments:", process.argv);
 
   // Parse ignore patterns if --ignore flag is present
@@ -120,7 +124,7 @@ function main() {
     process.exit(1);
   }
 
-  const files = readDirectory(dirPath, ignorePatterns);
+  const files = await readDirectory(dirPath, ignorePatterns);
   const xml = generateXml(files);
 
   const outputPath = path.join(process.cwd(), "repository.xml");

@@ -1,0 +1,9 @@
+node_modules
+.git
+*.log
+dist
+build
+*.swp
+*.swo
+.vscode
+repository.xml
